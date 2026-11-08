@@ -169,9 +169,9 @@ class Video:
     """
     MAGIC = b"\xc6\x6c\xa5\x5a"
 
-    def __init__(self, ip=CAR_IP, port=1234):
+    def __init__(self, ip=CAR_IP, port=1234, bind="0.0.0.0"):
         import os
-        self.ip, self.port = ip, port
+        self.ip, self.port, self.bind = ip, port, bind   # bind: with several cars each one listens on its own address
         self.subs = []                  # one queue per open video page
         self.sock = None
         self.quiet = None               # serve: a function that says nobody is using the car from here
@@ -205,7 +205,7 @@ class Video:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
-                s.bind(("0.0.0.0", self.port))
+                s.bind((self.bind, self.port))
             except OSError:
                 s.close()
                 if not told:
@@ -225,7 +225,7 @@ class Video:
     def _keepalive(self):
         # the app repeats its hello every few seconds; do the same so the stream keeps coming
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try: s.bind(("0.0.0.0", HELLO_PORT))
+        try: s.bind((self.bind, HELLO_PORT))
         except OSError: pass
         s.settimeout(0.3)
         while True:
@@ -965,11 +965,11 @@ ICON_512 = "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAIAAAB7GkOtAABGLUlEQVR42u3deZAcWX4f
 
 
 
-def cmd_serve(c, port=8765):
+def cmd_serve(c, port=8765, listen="127.0.0.1", bind="0.0.0.0"):
     import json
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.parse import urlparse, parse_qs
-    vid = Video(c.ip)
+    vid = Video(c.ip, bind=bind)
     # quiet when no controller page (or other app) has asked anything for a few seconds: the open page
     # asks every second, so a forgotten script never fights the FPV Car app or Nessari for the car
     seen = [time.time()]
@@ -1136,12 +1136,13 @@ def cmd_serve(c, port=8765):
         def log_message(self, *a): pass
 
     try:
-        srv = ThreadingHTTPServer(("127.0.0.1", port), H); srv.daemon_threads = True
+        srv = ThreadingHTTPServer((listen, port), H); srv.daemon_threads = True
     except OSError:
         print(f"port {port} is busy: the FPV Car app (or another copy of this script) is open.\n"
               "Close the app (swipe it away from recent apps), then run this again.")
         return
-    print(f"controller: http://127.0.0.1:{port}")
+    print(f"controller: http://{'127.0.0.1' if listen in ('127.0.0.1', '0.0.0.0') else listen}:{port}"
+          + (" (and on every address of this machine)" if listen == "0.0.0.0" else ""))
     try:
         srv.serve_forever()
     finally:
@@ -1224,10 +1225,30 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "probe":
         cmd_probe(); sys.exit()
     mode = sys.argv[1] if len(sys.argv) > 1 else "test"
-    car = Car()
+    # Several cars through the gateway (gateway/gateway.sh): `serve --car N` drives car N at 10.77.N.2,
+    # takes its video on 10.77.N.1 and serves the page on port 8760+N. Add `--listen 0.0.0.0` so players
+    # on the gateway's network can open it (it has no password).
+    opts = {}
+    args = sys.argv[2:]
+    for flag in ("--car", "--listen"):
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args): sys.exit(f"{flag} needs a value")
+            opts[flag] = args[i + 1]
+    kw = {}
+    if "--car" in opts:
+        if not opts["--car"].isdigit() or not 1 <= int(opts["--car"]) <= 99:
+            sys.exit("--car must be a number from 1 to 99")
+        n = int(opts["--car"])
+        car = Car(ip=f"10.77.{n}.2")
+        kw = {"port": 8760 + n, "bind": f"10.77.{n}.1"}
+    else:
+        car = Car()
+    if "--listen" in opts: kw["listen"] = opts["--listen"]
     print("car answered" if car.start() else "no answer from car - on its Wi-Fi? car switched on?")
     try:
-        {"test": cmd_test, "keys": cmd_keys, "serve": cmd_serve}[mode](car)
+        if mode == "serve": cmd_serve(car, **kw)
+        else: {"test": cmd_test, "keys": cmd_keys}[mode](car)
     except KeyboardInterrupt:
         pass
     finally:

@@ -41,10 +41,33 @@ car network with `wpa_supplicant`, gives it `172.16.11.2`) has not been run on h
 
 1. Does the adapter's driver move into a namespace (`iw phy phyX set netns name gwN`) and join an open network?
 2. Four cars at once on 2.4 GHz: do they share a channel, and how many keep a clean 720p picture?
-3. `Video` in `termux/fpv_car.py` binds `0.0.0.0:1234`; with several cars it must bind `10.77.N.1` instead
-   (one `Video` per car). Not changed yet.
+
+## Running four cars
+
+```
+sudo gateway/gateway.sh wifi-up 1 phy1 WL_FPV_CAR_12345678     # once per car: adapter phy, car's Wi-Fi name
+sudo gateway/gateway.sh wifi-up 2 phy2 WL_FPV_CAR_23456789     # ... up to 4 (find phyN with `iw dev`)
+gateway/start_cars.sh 4                                       # one controller page per car
+```
+
+Car N's controller page is then `http://<gateway address>:876N` (8761-8764). `fpv_car.py serve --car N` drives car N at
+`10.77.N.2`, takes its video on `10.77.N.1` and serves the page on port 8760+N; add `--listen 0.0.0.0` to open it to
+the network (`start_cars.sh` does). There is no password, so use a network you trust.
+A page opened over plain `http://` from another machine can't decode H.264 in the browser; it falls back to
+MJPEG, which needs `ffmpeg` on the gateway.
+
+Also tested here: `python3 gateway/test_serve_sim.py 4` starts four of these servers against four fake cars and
+checks each page's `/drive` and `/video` reach only its own car.
+
+## Choosing the four adapters
+
+Not tested on hardware. Needs: station mode, a driver in the kernel (no out-of-tree driver to build), 2.4 GHz
+(the cars are 2.4 GHz only). A web search suggests MT7612U (in the kernel since 4.19) and MT7610U adapters
+are well supported on Linux, but I found nothing confirming four of them working together as clients on a Pi.
+Buy one first, check `lsusb` for the exact chipset, and test it in the namespace before buying the other three.
+Put the adapters on a powered USB hub (four adapters can exceed a Pi's USB power budget).
 
 ## Next steps
 
-- Per-car `Video` (bind address) and a gateway server that exposes cars `/car/1` to `/car/4` to the existing page.
+- Hardware test with one real car and one adapter, then four.
 - Player-to-car assignment, a lobby, then game modes (races, tag) on top.
